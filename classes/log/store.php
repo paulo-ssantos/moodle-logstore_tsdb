@@ -15,20 +15,326 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Log store implementation for the logstore_tsdb plugin.
+ * Time Series Database log store.
  *
- * @package   logstore_tsdb
- * @copyright Antônio Neto <antoniocarolino.neto@ucsal.edu.br>
- *            Henrique Viana <henrique.viana@ucsal.edu.br>
- *            Luís Carvalho <luisguilherme.carvalho@ucsal.edu.br>
- *            Paulo Santos <paulovitor.santos@ucsal.edu.br>
- *            Yuri Gomes <yurijesus.gomes@ucsal.edu.br>
- * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @package    logstore_tsdb
+ * @copyright  2025 Your Name <your@email.com>
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-
 
 namespace logstore_tsdb\log;
 
+defined('MOODLE_INTERNAL') || die();
 
-// Needs validate if correct, the documentation and others plugins have other implementations.
-class store implements \tool_log\log\writer, \core\log\sql_internal_table_reader {}
+/**
+ * TSDB log store class.
+ *
+ * Implements writer interface to store Moodle events in a Time Series Database.
+ *
+ * @package    logstore_tsdb
+ * @copyright  2025 Your Name <your@email.com>
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+class store implements \tool_log\log\writer {
+
+    /** @var \tool_log\log\manager Log manager instance */
+    protected $manager;
+
+    /** @var array Plugin configuration */
+    protected $config;
+
+    /** @var mixed TSDB client connection */
+    protected $client;
+
+    /** @var array Event buffer for async writes */
+    protected $buffer = [];
+
+    /** @var int Last buffer flush timestamp */
+    protected $lastflush = 0;
+
+    /**
+     * Constructor.
+     *
+     * @param \tool_log\log\manager $manager Log manager instance
+     */
+    public function __construct(\tool_log\log\manager $manager) {
+        $this->manager = $manager;
+        $this->load_config();
+        $this->init_client();
+    }
+
+    /**
+     * Load plugin configuration.
+     */
+    protected function load_config() {
+        $this->config = [
+            'tsdb_type' => $this->get_config('tsdb_type', 'timescaledb'),
+            'host' => $this->get_config('host', 'localhost'),
+            'port' => $this->get_config('port', '5432'),  // Aligned with settings.php (PostgreSQL default).
+            'database' => $this->get_config('database', 'timescale_moodle'),  // Aligned with VPS setup.
+            'username' => $this->get_config('username', ''),  // Aligned with settings.php.
+            'password' => $this->get_config('password', ''),
+            'writemode' => $this->get_config('writemode', 'async'),
+            'buffersize' => $this->get_config('buffersize', 1000),
+            'flushinterval' => $this->get_config('flushinterval', 60),
+        ];
+        error_log('[LOGSTORE_TSDB] Configuration loaded: type=' . $this->config['tsdb_type'] .
+                  ', host=' . $this->config['host'] .
+                  ', port=' . $this->config['port'] .
+                  ', database=' . $this->config['database'] .
+                  ', writemode=' . $this->config['writemode']);
+    }
+
+    /**
+     * Initialize TSDB client connection.
+     */
+    protected function init_client() {
+        try {
+            if ($this->config['tsdb_type'] === 'timescaledb') {
+                error_log('[LOGSTORE_TSDB] Initializing TimescaleDB client...');
+                error_log('[LOGSTORE_TSDB] Connection params: host=' . $this->config['host'] .
+                          ', port=' . $this->config['port'] .
+                          ', database=' . $this->config['database'] .
+                          ', username=' . $this->config['username']);
+
+                // Initialize TimescaleDB client.
+                require_once(__DIR__ . '/../client/timescaledb_client.php');
+                $this->client = new \logstore_tsdb\client\timescaledb_client($this->config);
+
+                // Verify connection.
+                if ($this->client->is_connected()) {
+                    $msg = 'TimescaleDB client initialized successfully';
+                    debugging($msg, DEBUG_DEVELOPER);
+                    error_log('[LOGSTORE_TSDB] ' . $msg);
+
+                    // Auto-create schema if it doesn't exist.
+                    try {
+                        $this->client->ensure_schema();
+                    } catch (\Exception $e) {
+                        $msg = 'Failed to ensure schema: ' . $e->getMessage();
+                        debugging($msg, DEBUG_NORMAL);
+                        error_log('[LOGSTORE_TSDB] WARNING: ' . $msg);
+                        // Continue - write attempts will fail gracefully.
+                    }
+                } else {
+                    $msg = 'TimescaleDB client connected but health check failed';
+                    debugging($msg, DEBUG_NORMAL);
+                    error_log('[LOGSTORE_TSDB] WARNING: ' . $msg);
+                }
+            } else {
+                // Future support for other TSDBs (InfluxDB, etc.)
+                $msg = "TSDB type '{$this->config['tsdb_type']}' not yet supported";
+                debugging($msg, DEBUG_NORMAL);
+                error_log('[LOGSTORE_TSDB] ERROR: ' . $msg);
+            }
+        } catch (\Exception $e) {
+            // Log error but don't fail - plugin can still work in degraded mode.
+            $msg = 'Error initializing TSDB client: ' . $e->getMessage();
+            debugging($msg, DEBUG_NORMAL);
+            error_log('[LOGSTORE_TSDB] CRITICAL ERROR: ' . $msg);
+            error_log('[LOGSTORE_TSDB] Stack trace: ' . $e->getTraceAsString());
+            $this->client = null;
+        }
+    }
+
+    /**
+     * Write event to TSDB.
+     *
+     * @param \core\event\base $event Event to store
+     * @param \tool_log\log\manager|null $manager Log manager instance (optional, for compatibility)
+     */
+    public function write(\core\event\base $event, $manager = null) {
+        error_log('[LOGSTORE_TSDB] write() called for event: ' . $event->eventname);
+
+        // Ignore anonymous events.
+        if ($event->anonymous) {
+            error_log('[LOGSTORE_TSDB] Skipping anonymous event: ' . $event->eventname);
+            return;
+        }
+
+        // Transform event to TSDB format.
+        $datapoint = $this->transform_event($event);
+
+        if ($this->config['writemode'] === 'sync') {
+            // Synchronous write - immediate.
+            error_log('[LOGSTORE_TSDB] Using sync write mode for event: ' . $event->eventname);
+            $this->write_datapoint($datapoint);
+        } else {
+            // Asynchronous write - buffer.
+            error_log('[LOGSTORE_TSDB] Using async write mode, buffering event: ' . $event->eventname);
+            $this->buffer_event($datapoint);
+        }
+    }
+
+    /**
+     * Transform Moodle event to TSDB datapoint format.
+     *
+     * @param \core\event\base $event Moodle event
+     * @return array Formatted datapoint
+     */
+    protected function transform_event(\core\event\base $event) {
+        global $USER;
+
+        return [
+            'measurement' => 'moodle_events',
+            'tags' => [
+                'eventname' => $event->eventname,
+                'component' => $event->component,
+                'action' => $event->action,
+                'target' => $event->target,
+                'crud' => $event->crud,
+                'edulevel' => (string)$event->edulevel,
+                'courseid' => (string)$event->courseid,
+            ],
+            'fields' => [
+                'userid' => $event->userid,
+                'contextid' => $event->contextid,
+                'contextlevel' => $event->contextlevel,
+                'contextinstanceid' => $event->contextinstanceid,
+                'objectid' => $event->objectid ?? null,
+                'objecttable' => $event->objecttable ?? null,
+                'relateduserid' => $event->relateduserid ?? null,
+                'realuserid' => !empty($event->realuserid) ? $event->realuserid : null,
+                'anonymous' => $event->anonymous ? 1 : 0,
+                'ip' => getremoteaddr(),
+                'origin' => $event->origin ?? 'web',
+                'other' => !empty($event->other) ? json_encode($event->other) : null,
+            ],
+            'timestamp' => $event->timecreated,
+        ];
+    }
+
+    /**
+     * Write single datapoint to TSDB.
+     *
+     * @param array $datapoint Formatted datapoint
+     * @return bool Success status
+     */
+    protected function write_datapoint($datapoint) {
+        if (!$this->client) {
+            $msg = 'TSDB client not initialized, cannot write event';
+            debugging($msg, DEBUG_DEVELOPER);
+            error_log('[LOGSTORE_TSDB] ERROR: ' . $msg);
+            return false;
+        }
+
+        try {
+            $eventname = $datapoint['tags']['eventname'] ?? 'unknown';
+            error_log('[LOGSTORE_TSDB] Writing single event synchronously: ' . $eventname);
+
+            $success = $this->client->write_point($datapoint);
+
+            if ($success) {
+                error_log('[LOGSTORE_TSDB] Successfully wrote event: ' . $eventname);
+            } else {
+                $msg = 'Failed to write event to TSDB: ' . $eventname;
+                debugging($msg, DEBUG_DEVELOPER);
+                error_log('[LOGSTORE_TSDB] ERROR: ' . $msg);
+            }
+
+            return $success;
+
+        } catch (\Exception $e) {
+            $msg = 'Error writing to TSDB: ' . $e->getMessage();
+            debugging($msg, DEBUG_NORMAL);
+            error_log('[LOGSTORE_TSDB] EXCEPTION: ' . $msg);
+            return false;
+        }
+    }
+
+    /**
+     * Add event to buffer for asynchronous writing.
+     *
+     * @param array $datapoint Formatted datapoint
+     */
+    protected function buffer_event($datapoint) {
+        $this->buffer[] = $datapoint;
+
+        // Check if buffer should be flushed.
+        if (count($this->buffer) >= $this->config['buffersize'] ||
+            (time() - $this->lastflush) >= $this->config['flushinterval']) {
+            $this->flush_buffer();
+        }
+    }
+
+    /**
+     * Flush buffered events to TSDB.
+     *
+     * @return bool Success status
+     */
+    protected function flush_buffer() {
+        if (empty($this->buffer)) {
+            error_log('[LOGSTORE_TSDB] flush_buffer() called but buffer is empty');
+            return true;
+        }
+
+        if (!$this->client) {
+            $count = count($this->buffer);
+            $msg = "TSDB client not initialized, discarding $count buffered events";
+            debugging($msg, DEBUG_NORMAL);
+            error_log('[LOGSTORE_TSDB] ERROR: ' . $msg);
+            $this->buffer = [];
+            return false;
+        }
+
+        try {
+            $count = count($this->buffer);
+            $msg = "Flushing $count buffered events to TSDB";
+            debugging($msg, DEBUG_DEVELOPER);
+            error_log('[LOGSTORE_TSDB] ' . $msg);
+
+            // Batch write all buffered events.
+            $success = $this->client->write_points($this->buffer);
+
+            if ($success) {
+                $msg = "Successfully flushed $count events to TSDB";
+                debugging($msg, DEBUG_DEVELOPER);
+                error_log('[LOGSTORE_TSDB] SUCCESS: ' . $msg);
+                $this->buffer = [];
+                $this->lastflush = time();
+                return true;
+            } else {
+                $msg = "Failed to flush $count events to TSDB";
+                debugging($msg, DEBUG_NORMAL);
+                error_log('[LOGSTORE_TSDB] ERROR: ' . $msg);
+                // Keep buffer for retry on next attempt.
+                return false;
+            }
+
+        } catch (\Exception $e) {
+            $count = count($this->buffer);
+            $msg = "Error flushing buffer ($count events) to TSDB: " . $e->getMessage();
+            debugging($msg, DEBUG_NORMAL);
+            error_log('[LOGSTORE_TSDB] EXCEPTION: ' . $msg);
+            // On critical error, discard buffer to prevent memory issues.
+            $this->buffer = [];
+            return false;
+        }
+    }
+
+    /**
+     * Cleanup - flush any remaining buffered events.
+     */
+    public function dispose() {
+        // Flush any remaining buffered events before closing.
+        $this->flush_buffer();
+
+        // Close TSDB connection.
+        if ($this->client && method_exists($this->client, 'close')) {
+            $this->client->close();
+            debugging('TSDB connection closed on dispose', DEBUG_DEVELOPER);
+        }
+    }
+
+    /**
+     * Helper to get plugin configuration.
+     *
+     * @param string $name Config name
+     * @param mixed $default Default value
+     * @return mixed Config value
+     */
+    protected function get_config($name, $default = null) {
+        $value = get_config('logstore_tsdb', $name);
+        return ($value !== false) ? $value : $default;
+    }
+}
