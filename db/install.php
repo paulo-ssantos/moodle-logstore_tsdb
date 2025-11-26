@@ -26,32 +26,32 @@
   * Para upgrades de schema, use upgrade.php; para limpeza/remoção na desinstalação, use uninstall.php.
   */
 
-function xmldb_logstore_timescaledb_install() {
+function xmldb_logstore_tsdb_install() {
     global $DB;
 
+    error_log('[logstore_tsdb] install.php executed at ' . date('c'));
+
     // 1. Transformando em Hypertable (OBRIGATÓRIO com TimescaleDB)
-    $DB->execute("
-        SELECT create_hypertable('moodle_events', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
-    ");
+    $DB->execute("SELECT create_hypertable('moodle_events', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE)");
 
     // 2. Criação dos índices (ALTAMENTE RECOMENDADO para performance)
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_time ON moodle_events (time DESC);");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_eventname ON moodle_events (time DESC, eventname);");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_userid ON moodle_events (time DESC, userid);");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_courseid ON moodle_events (time DESC, courseid) WHERE courseid IS NOT NULL;");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_contextid ON moodle_events (time DESC, contextid);");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_crud ON moodle_events (crud, time DESC);");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_edulevel ON moodle_events (edulevel, time DESC);");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_component_action ON moodle_events (component, action, time DESC);");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_time ON moodle_events (time DESC)");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_eventname ON moodle_events (time DESC, eventname)");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_userid ON moodle_events (time DESC, userid)");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_courseid ON moodle_events (time DESC, courseid) WHERE courseid IS NOT NULL");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_contextid ON moodle_events (time DESC, contextid)");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_crud ON moodle_events (crud, time DESC)");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_edulevel ON moodle_events (edulevel, time DESC)");
+    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_component_action ON moodle_events (component, action, time DESC)");
 
     // 3. Configuração de compressão e políticas (OPCIONAL, mas recomendado)
     $DB->execute("ALTER TABLE moodle_events SET (
         timescaledb.compress,
         timescaledb.compress_segmentby = 'component, action, edulevel',
         timescaledb.compress_orderby = 'time DESC, userid'
-    );");
-    $DB->execute("SELECT add_compression_policy('moodle_events', INTERVAL '7 days');");
-    $DB->execute("SELECT add_retention_policy('moodle_events', INTERVAL '1 year');");
+    )");
+    $DB->execute("SELECT add_compression_policy('moodle_events', INTERVAL '7 days')");
+    $DB->execute("SELECT add_retention_policy('moodle_events', INTERVAL '1 year')");
 
     // 4. Continuous aggregates/views de relatórios (OPCIONAL, recomendado para analytics)
     $DB->execute("CREATE MATERIALIZED VIEW IF NOT EXISTS moodle_events_hourly
@@ -67,13 +67,12 @@ function xmldb_logstore_timescaledb_install() {
         FROM moodle_events
         WHERE courseid IS NOT NULL
         GROUP BY bucket, component, action, edulevel
-        WITH NO DATA;
-    ");
+        WITH NO DATA");
     $DB->execute("SELECT add_continuous_aggregate_policy('moodle_events_hourly',
         start_offset => INTERVAL '3 hours',
         end_offset => INTERVAL '1 hour',
         schedule_interval => INTERVAL '1 hour'
-    );");
+    )");
 
     $DB->execute("CREATE MATERIALIZED VIEW IF NOT EXISTS moodle_events_daily
         WITH (timescaledb.continuous) AS
@@ -86,16 +85,15 @@ function xmldb_logstore_timescaledb_install() {
         FROM moodle_events
         WHERE courseid IS NOT NULL
         GROUP BY bucket, component
-        WITH NO DATA;
-    ");
+        WITH NO DATA");
     $DB->execute("SELECT add_continuous_aggregate_policy('moodle_events_daily',
         start_offset => INTERVAL '7 days',
         end_offset => INTERVAL '1 day',
         schedule_interval => INTERVAL '1 day'
-    );");
+    )");
 
     // 5. Função auxiliar para relatórios rápidos (OPCIONAL)
-    $DB->execute("CREATE OR REPLACE FUNCTION get_events_per_hour(hours INTEGER DEFAULT 24)
+    /*$DB->execute("CREATE OR REPLACE FUNCTION get_events_per_hour(hours INTEGER DEFAULT 24)
 RETURNS TABLE (
     hour TIMESTAMPTZ,
     count BIGINT
@@ -109,6 +107,7 @@ BEGIN
     WHERE time > NOW() - (hours || ' hours')::INTERVAL
     GROUP BY hour
     ORDER BY hour DESC;
-END;
-$$ LANGUAGE plpgsql;");
+END;*/
+    // Observação: criação de funções PL/pgSQL é bloqueada por $DB->execute()
+    // devido à presença de múltiplos ';' no corpo da função. Removido aqui.
 }
