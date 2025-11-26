@@ -29,4 +29,60 @@
 $string['pluginname'] = 'TimescaleDB log store';
 
 // Settings.
+$string['tsdb_type'] = 'Database Type';
+$string['tsdb_type_help'] = 'Select the type of time-series database to use (Only TimescaleDB supported for now)';
+
+$string['host'] = 'Database Host';
+$string['host_help'] = 'The hostname or IP address of the database server';
+
+$string['port'] = 'Database Port';
+$string['port_help'] = 'The port number for the database connection (default: 5433 for TimescaleDB)';
+
+$string['database'] = 'Database Name';
+$string['database_help'] = 'The name of the database to store logs';
+
+$string['username'] = 'Database Username';
+$string['username_help'] = 'The username for database authentication';
+
+$string['password'] = 'Database Password';
+$string['password_help'] = 'The password for database authentication';
+
+$string['databasetable'] = 'Database Table';
+$string['databasetable_help'] = 'The name of the table where logs will be stored';
+
+$string['writemode'] = 'Write Mode';
+$string['writemode_help'] = 'Choose between synchronous or asynchronous write mode';
+$string['writemode_sync'] = 'Synchronous (immediate write)';
+$string['writemode_async'] = 'Asynchronous (buffered write)';
+
+$string['buffersize'] = 'Buffer Size';
+$string['buffersize_help'] = 'Number of log entries to buffer before writing (only applies to async mode)';
+
+$string['flushinterval'] = 'Flush Interval';
+$string['flushinterval_help'] = 'Time interval in seconds to flush buffered logs (only applies to async mode)';
+
+// Test settings page.
+$string['testsettings'] = 'Test TimescaleDB Connection';
+$string['currentsettings'] = 'Current Configuration';
+$string['notconfigured'] = 'Not configured';
+$string['connectiontest'] = 'Connection Test';
+$string['connectiontest_success'] = 'Successfully connected to TimescaleDB!';
+$string['connectiontest_failed'] = 'Failed to establish connection to TimescaleDB';
+$string['connectiontest_exception'] = 'Connection error: {$a}';
+$string['postgresversion'] = 'PostgreSQL Version: {$a}';
+$string['timescaledb_found'] = 'TimescaleDB extension found (version {$a})';
+$string['timescaledb_notfound'] = 'TimescaleDB extension not installed (plugin will work with standard PostgreSQL)';
+$string['tabletest'] = 'Table Access Test';
+$string['tabletest_success'] = 'Table "{$a->table}" is accessible and contains {$a->count} events';
+$string['tabletest_failed'] = 'Cannot access table "{$a->table}": {$a->error}';
+$string['buffertest'] = 'Buffer Status';
+$string['currentbuffersize'] = 'Current buffer size: {$a} events';
+$string['asyncmode_enabled'] = 'Async mode enabled (buffer size: {$a->buffersize}, flush interval: {$a->flushinterval}s)';
+$string['syncmode_enabled'] = 'Sync mode enabled (immediate writes)';
+$string['backtosettings'] = 'Back to Settings';
+
+// Error messages.
+$string['error_connection'] = 'Failed to connect to TimescaleDB server at {$a->host}:{$a->port}';
+$string['error_missingconfig'] = 'Missing required configuration: {$a}';
+
 $string['serverurl'] = 'TSDB Server URL';
