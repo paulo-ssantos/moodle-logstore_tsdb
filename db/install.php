@@ -26,88 +26,137 @@
   * Para upgrades de schema, use upgrade.php; para limpeza/remoção na desinstalação, use uninstall.php.
   */
 
-function xmldb_logstore_tsdb_install() {
-    global $DB;
+// Helpers simples para manter legibilidade sem alterar SQLs.
+function logstore_tsdb_quote_ident($name) {
+    return '"' . str_replace('"', '""', $name) . '"';
+}
 
+function logstore_tsdb_exec($conn, $sql, $okmsg, $failprefix = '[logstore_tsdb] ERRO') {
+    $res = pg_query($conn, $sql);
+    if ($res === false) {
+        error_log($failprefix . ': ' . pg_last_error($conn));
+        return false;
+    }
+    if ($okmsg) {
+        error_log($okmsg);
+    }
+    return true;
+}
+
+function xmldb_logstore_tsdb_install() {
     error_log('[logstore_tsdb] install.php executed at ' . date('c'));
 
-    // 1. Transformando em Hypertable (OBRIGATÓRIO com TimescaleDB)
-    $DB->execute("SELECT create_hypertable('moodle_events', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE)");
+    // Config e conexão TSDB externo.
+    $cfg = get_config('logstore_tsdb');
+    $pghost = trim((string)($cfg->host ?? ''));
+    $pgport = trim((string)($cfg->port ?? ''));
+    $pgdb   = trim((string)($cfg->database ?? ''));
+    $pguser = trim((string)($cfg->username ?? ''));
+    $pgpass = (string)($cfg->password ?? '');
+    $pgschema = 'public';
+    $tableName = trim((string)($cfg->dbtable ?? ''));
 
-    // 2. Criação dos índices (ALTAMENTE RECOMENDADO para performance)
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_time ON moodle_events (time DESC)");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_eventname ON moodle_events (time DESC, eventname)");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_userid ON moodle_events (time DESC, userid)");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_courseid ON moodle_events (time DESC, courseid) WHERE courseid IS NOT NULL");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_contextid ON moodle_events (time DESC, contextid)");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_crud ON moodle_events (crud, time DESC)");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_edulevel ON moodle_events (edulevel, time DESC)");
-    $DB->execute("CREATE INDEX IF NOT EXISTS idx_moodle_events_component_action ON moodle_events (component, action, time DESC)");
+    // Garante que todos os campos foram configurados na interface antes de prosseguir.
+    $missing = [];
+    if ($pghost === '')    { $missing[] = 'host'; }
+    if ($pgport === '')    { $missing[] = 'port'; }
+    if ($pgdb === '')      { $missing[] = 'database'; }
+    if ($pguser === '')    { $missing[] = 'username'; }
+    // Password pode ser vazio em setups com trust, mas se você exige, descomente:
+    if ($tableName === '') { $missing[] = 'dbtable'; }
+    if (!empty($missing)) {
+        error_log('[logstore_tsdb] Configuração incompleta em settings.php; instalação adiada. Campos faltando: ' . implode(', ', $missing));
+        return;
+    }
 
-    // 3. Configuração de compressão e políticas (OPCIONAL, mas recomendado)
-    $DB->execute("ALTER TABLE moodle_events SET (
-        timescaledb.compress,
-        timescaledb.compress_segmentby = 'component, action, edulevel',
-        timescaledb.compress_orderby = 'time DESC, userid'
-    )");
-    $DB->execute("SELECT add_compression_policy('moodle_events', INTERVAL '7 days')");
-    $DB->execute("SELECT add_retention_policy('moodle_events', INTERVAL '1 year')");
+    $connstr = 'host=' . $pghost . ' port=' . $pgport . ' dbname=' . $pgdb . ' user=' . $pguser . (strlen($pgpass) ? ' password=' . $pgpass : '');
+    $conn = @pg_connect($connstr);
+    if (!$conn) {
+        error_log('[logstore_tsdb] ERRO: não conectou ao TimescaleDB externo com settings.php.');
+        return;
+    }
+    error_log('[logstore_tsdb] Conectado ao TimescaleDB externo.');
 
-    // 4. Continuous aggregates/views de relatórios (OPCIONAL, recomendado para analytics)
-    $DB->execute("CREATE MATERIALIZED VIEW IF NOT EXISTS moodle_events_hourly
-        WITH (timescaledb.continuous) AS
+    // Identificadores e search_path.
+    $schemaIdent = logstore_tsdb_quote_ident($pgschema);
+    $tableIdent  = logstore_tsdb_quote_ident($tableName);
+    $qualified   = $schemaIdent . '.' . $tableIdent;
+    logstore_tsdb_exec($conn, 'CREATE SCHEMA IF NOT EXISTS ' . $schemaIdent . ';', '[logstore_tsdb] Schema pronto: ' . $schemaIdent);
+    logstore_tsdb_exec($conn, 'SET search_path TO ' . $schemaIdent . ';', '[logstore_tsdb] search_path ajustado');
+
+    // CREATE TABLE (mantendo exatamente o mesmo SQL previamente utilizado).
+    $createtable = 'CREATE TABLE IF NOT EXISTS ' . $qualified . ' (
+        "id" BIGSERIAL PRIMARY KEY,
+        "time" TIMESTAMPTZ NOT NULL,
+        "eventname" VARCHAR(255) NOT NULL,
+        "component" VARCHAR(100),
+        "action" VARCHAR(100),
+        "target" VARCHAR(100),
+        "crud" CHAR(1),
+        "edulevel" INT,
+        "anonymous" INT DEFAULT 0,
+        "courseid" BIGINT,
+        "contextid" BIGINT,
+        "contextlevel" INT,
+        "contextinstanceid" BIGINT,
+        "userid" BIGINT,
+        "relateduserid" BIGINT,
+        "realuserid" BIGINT,
+        "objectid" BIGINT,
+        "objecttable" VARCHAR(255),
+        "timecreated" BIGINT,
+        "ip" VARCHAR(45),
+        "origin" VARCHAR(20),
+        "other" TEXT
+    );';
+    if (!logstore_tsdb_exec($conn, $createtable, '[logstore_tsdb] Tabela criada/confirmada no TSDB externo: ' . $qualified)) {
+        pg_close($conn);
+        return;
+    }
+
+    // Verifica extensão timescaledb.
+    $extRes = pg_query($conn, "SELECT COUNT(*)::int AS cnt FROM pg_extension WHERE extname='timescaledb';");
+    $extRow = ($extRes) ? pg_fetch_assoc($extRes) : null;
+    $hasTimescale = $extRow && (int)$extRow['cnt'] > 0;
+
+    // Hypertable.
+    if ($hasTimescale) {
+        $sql = "SELECT create_hypertable('" . str_replace('"', '""', $tableName) . "', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);";
+        if (!logstore_tsdb_exec($conn, $sql, '[logstore_tsdb] Hypertable OK para: ' . $tableName, '[logstore_tsdb] Aviso: create_hypertable falhou')) {
+            // continua mesmo assim
+        }
+    } else {
+        error_log('[logstore_tsdb] Extensão timescaledb não encontrada; seguindo sem hypertable.');
+    }
+
+    // Índices essenciais (SQLs mantidos).
+    logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_time ON " . $qualified . " (time DESC);", '[logstore_tsdb] Índice time OK');
+    logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_userid ON " . $qualified . " (time DESC, userid);", '[logstore_tsdb] Índice userid OK');
+
+    // Compressão simples.
+    if ($hasTimescale) {
+        logstore_tsdb_exec($conn, "ALTER TABLE " . $qualified . " SET (timescaledb.compress);", '[logstore_tsdb] Compressão habilitada');
+    }
+
+    pg_close($conn);
+    error_log('[logstore_tsdb] Inicialização concluída no TimescaleDB externo (apenas TSDB).');
+
+    /* Função auxiliar comentada (mantida conforme pedido, sem executar)
+    CREATE OR REPLACE FUNCTION get_events_per_hour(hours INTEGER DEFAULT 24)
+    RETURNS TABLE (
+        hour TIMESTAMPTZ,
+        count BIGINT
+    ) AS $$
+    BEGIN
+        RETURN QUERY
         SELECT
-            time_bucket('1 hour', time) AS bucket,
-            component,
-            action,
-            edulevel,
-            COUNT(*) as event_count,
-            COUNT(DISTINCT userid) as unique_users,
-            COUNT(DISTINCT courseid) as unique_courses
+            time_bucket('1 hour', time) AS hour,
+            COUNT(*) AS count
         FROM moodle_events
-        WHERE courseid IS NOT NULL
-        GROUP BY bucket, component, action, edulevel
-        WITH NO DATA");
-    $DB->execute("SELECT add_continuous_aggregate_policy('moodle_events_hourly',
-        start_offset => INTERVAL '3 hours',
-        end_offset => INTERVAL '1 hour',
-        schedule_interval => INTERVAL '1 hour'
-    )");
-
-    $DB->execute("CREATE MATERIALIZED VIEW IF NOT EXISTS moodle_events_daily
-        WITH (timescaledb.continuous) AS
-        SELECT
-            time_bucket('1 day', time) AS bucket,
-            component,
-            COUNT(*) as event_count,
-            COUNT(DISTINCT userid) as unique_users,
-            COUNT(DISTINCT courseid) as unique_courses
-        FROM moodle_events
-        WHERE courseid IS NOT NULL
-        GROUP BY bucket, component
-        WITH NO DATA");
-    $DB->execute("SELECT add_continuous_aggregate_policy('moodle_events_daily',
-        start_offset => INTERVAL '7 days',
-        end_offset => INTERVAL '1 day',
-        schedule_interval => INTERVAL '1 day'
-    )");
-
-    // 5. Função auxiliar para relatórios rápidos (OPCIONAL)
-    /*$DB->execute("CREATE OR REPLACE FUNCTION get_events_per_hour(hours INTEGER DEFAULT 24)
-RETURNS TABLE (
-    hour TIMESTAMPTZ,
-    count BIGINT
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT
-        time_bucket('1 hour', time) AS hour,
-        COUNT(*) AS count
-    FROM moodle_events
-    WHERE time > NOW() - (hours || ' hours')::INTERVAL
-    GROUP BY hour
-    ORDER BY hour DESC;
-END;*/
-    // Observação: criação de funções PL/pgSQL é bloqueada por $DB->execute()
-    // devido à presença de múltiplos ';' no corpo da função. Removido aqui.
+        WHERE time > NOW() - (hours || ' hours')::INTERVAL
+        GROUP BY hour
+        ORDER BY hour DESC;
+    END; */
 }
+
+// Removidos helpers de parsing do install.xml para garantir criação apenas no TSDB externo.

@@ -110,7 +110,7 @@ if ($hassiteconfig) {
         'logstore_tsdb/dbtable',
         get_string('databasetable', 'logstore_tsdb'),
         get_string('databasetable_help', 'logstore_tsdb'),
-        'logstore_tsdb_log'
+        'moodle_events'
     ));
 
     // Write mode settings.
