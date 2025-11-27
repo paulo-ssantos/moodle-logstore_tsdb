@@ -28,26 +28,82 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-/**
- * USAGE:
- * @Param 1 = Config context: 'logstore_tsdb'
- * @Param 2 = Config name: 'dbhost'
- * get_config('logstore_tsdb', 'dbhost')
- */
-
 if ($hassiteconfig) {
 
-    $testurl = new moodle_url('/admin/tool/log/store/tsdb/test_settings.php');
-    $test = new admin_externalpage(
-        'logstoretsdb_testsettings',
-        get_string('testsettings', 'logstore_tsdb'),
-        $testurl,
-        'moodle/site:config',
-        true
-    );
-    $ADMIN->add('logging', $test);
+    /**
+     * Custom setting class to validate TimescaleDB connection before saving.
+     * We extend the Password field because that is usually the final credential needed.
+     */
+    class admin_setting_tsdb_connection_validate extends admin_setting_configpasswordunmask {
 
-    // Add test connection link to settings page.
+        public function write_setting($data) {
+            global $CFG;
+
+            // 1. Perform standard validation first (check if string is valid).
+            $result = parent::write_setting($data);
+            if ($result !== '') {
+                return $result; // If parent failed, return that error.
+            }
+
+            // 2. Retrieve the OTHER settings from the form submission (POST data).
+            // We cannot rely on get_config() here because the user might be changing
+            // the host/user/port in this very request, and those haven't been saved yet.
+            // Moodle admin fields are prefixed with 's_' followed by plugin_name_setting_name.
+            
+            $host = optional_param('s_logstore_tsdb_host', 'localhost', PARAM_TEXT);
+            $port = optional_param('s_logstore_tsdb_port', 5433, PARAM_INT);
+            $dbname = optional_param('s_logstore_tsdb_database', 'moodle_logs_tsdb', PARAM_TEXT);
+            $user = optional_param('s_logstore_tsdb_username', 'moodleuser', PARAM_TEXT);
+            
+            // The password is the $data passed to this function.
+            $password = $data;
+
+            // Build the config array for the client.
+            $test_config = [
+                'host' => $host,
+                'port' => $port,
+                'database' => $dbname,
+                'username' => $user,
+                'password' => $password,
+                'dbtable' => optional_param('s_logstore_tsdb_dbtable', 'moodle_events', PARAM_TEXT),
+            ];
+
+            // 3. Attempt Connection.
+            try {
+                // Ensure the client class is loaded.
+                $clientpath = $CFG->dirroot . '/admin/tool/log/store/tsdb/classes/client/timescaledb_client.php';
+                
+                // Check if file exists to avoid fatal error during development
+                if (!file_exists($clientpath)) {
+                     // Fallback if class file is missing, but allow save to proceed (or block if strict).
+                     return "Error: Client class not found at $clientpath";
+                }
+
+                require_once($clientpath);
+                
+                // Assuming your client constructor takes an array or individual params.
+                // Based on your previous code: new client($config)
+                $client = new \logstore_tsdb\client\timescaledb_client($test_config);
+
+                if ($client->is_connected()) {
+                    // CONNECTION SUCCESSFUL: Return '' (empty string) means success in Moodle settings.
+                    return ''; 
+                } else {
+                    // CONNECTION FAILED: Return error message.
+                    return get_string('connectiontest_failed', 'logstore_tsdb');
+                }
+
+            } catch (Exception $e) {
+                // EXCEPTION CAUGHT: Return the error message to display in the interface.
+                return get_string('connectiontest_exception', 'logstore_tsdb', $e->getMessage());
+            }
+        }
+    }
+
+    $settings = new admin_settingpage('logstore_tsdb', get_string('pluginname', 'logstore_tsdb'));
+
+    // Link to external test page (Keep this if you still want a manual test button)
+    $testurl = new moodle_url('/admin/tool/log/store/tsdb/test_settings.php');
     $link = html_writer::link($testurl, get_string('testsettings', 'logstore_tsdb'), array('target' => '_blank'));
     $settings->add(new admin_setting_heading(
         'logstore_tsdb/testconnection',
@@ -66,7 +122,7 @@ if ($hassiteconfig) {
         )
     ));
 
-    // Database connection settings.
+    // Host
     $settings->add(new admin_setting_configtext(
         'logstore_tsdb/host',
         get_string('host', 'logstore_tsdb'),
@@ -75,6 +131,7 @@ if ($hassiteconfig) {
         PARAM_HOST
     ));
 
+    // Port
     $settings->add(new admin_setting_configtext(
         'logstore_tsdb/port',
         get_string('port', 'logstore_tsdb'),
@@ -83,6 +140,7 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    // Database
     $settings->add(new admin_setting_configtext(
         'logstore_tsdb/database',
         get_string('database', 'logstore_tsdb'),
@@ -91,6 +149,7 @@ if ($hassiteconfig) {
         PARAM_TEXT
     ));
 
+    // Username
     $settings->add(new admin_setting_configtext(
         'logstore_tsdb/username',
         get_string('username', 'logstore_tsdb'),
@@ -99,45 +158,21 @@ if ($hassiteconfig) {
         PARAM_TEXT
     ));
 
-    $settings->add(new admin_setting_configpasswordunmask(
+    // --- CHANGED: Use the custom validation class for the Password field ---
+    // This triggers the validation logic defined in the class above when saving.
+    $settings->add(new admin_setting_tsdb_connection_validate(
         'logstore_tsdb/password',
         get_string('password', 'logstore_tsdb'),
         get_string('password_help', 'logstore_tsdb'),
         ''
     ));
 
+    // Table
     $settings->add(new admin_setting_configtext(
         'logstore_tsdb/dbtable',
         get_string('databasetable', 'logstore_tsdb'),
         get_string('databasetable_help', 'logstore_tsdb'),
-        'moodle_events'
-    ));
-
-    // Write mode settings.
-    $settings->add(new admin_setting_configselect(
-        'logstore_tsdb/writemode',
-        get_string('writemode', 'logstore_tsdb'),
-        get_string('writemode_help', 'logstore_tsdb'),
-        'async',
-        array(
-            'sync' => get_string('writemode_sync', 'logstore_tsdb'),
-            'async' => get_string('writemode_async', 'logstore_tsdb')
-        )
-    ));
-
-    $settings->add(new admin_setting_configtext(
-        'logstore_tsdb/buffersize',
-        get_string('buffersize', 'logstore_tsdb'),
-        get_string('buffersize_help', 'logstore_tsdb'),
-        '1000',
-        PARAM_INT
-    ));
-
-    $settings->add(new admin_setting_configtext(
-        'logstore_tsdb/flushinterval',
-        get_string('flushinterval', 'logstore_tsdb'),
-        get_string('flushinterval_help', 'logstore_tsdb'),
-        '60',
-        PARAM_INT
+        'moodle_events',
+        PARAM_TEXT
     ));
 }
