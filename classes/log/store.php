@@ -67,21 +67,24 @@ class store implements \tool_log\log\writer {
      * Load plugin configuration.
      */
     protected function load_config() {
+        $cfg = get_config('logstore_tsdb');
         $this->config = [
-            'tsdb_type' => $this->get_config('tsdb_type', 'timescaledb'),
-            'host' => $this->get_config('host', 'localhost'),
-            'port' => $this->get_config('port', '5432'),  // Aligned with settings.php (PostgreSQL default).
-            'database' => $this->get_config('database', 'timescale_moodle'),  // Aligned with VPS setup.
-            'username' => $this->get_config('username', ''),  // Aligned with settings.php.
-            'password' => $this->get_config('password', ''),
-            'writemode' => $this->get_config('writemode', 'async'),
-            'buffersize' => $this->get_config('buffersize', 1000),
-            'flushinterval' => $this->get_config('flushinterval', 60),
+            'tsdb_type' => 'timescaledb',
+            'host' => trim((string)($cfg->host ?? '')),
+            'port' => trim((string)($cfg->port ?? '')),
+            'database' => trim((string)($cfg->database ?? '')),
+            'username' => trim((string)($cfg->username ?? '')),
+            'password' => (string)($cfg->password ?? ''),
+            'dbtable' => trim((string)($cfg->dbtable ?? '')),
+            'writemode' => $cfg->writemode ?? 'async',
+            'buffersize' => (int)($cfg->buffersize ?? 1000),
+            'flushinterval' => (int)($cfg->flushinterval ?? 60),
         ];
-        error_log('[LOGSTORE_TSDB] Configuration loaded: type=' . $this->config['tsdb_type'] .
-                  ', host=' . $this->config['host'] .
+        error_log('[LOGSTORE_TSDB] Config carregada: host=' . $this->config['host'] .
                   ', port=' . $this->config['port'] .
                   ', database=' . $this->config['database'] .
+                  ', username=' . $this->config['username'] .
+                  ', dbtable=' . $this->config['dbtable'] .
                   ', writemode=' . $this->config['writemode']);
     }
 
@@ -95,7 +98,23 @@ class store implements \tool_log\log\writer {
                 error_log('[LOGSTORE_TSDB] Connection params: host=' . $this->config['host'] .
                           ', port=' . $this->config['port'] .
                           ', database=' . $this->config['database'] .
-                          ', username=' . $this->config['username']);
+                          ', username=' . $this->config['username'] .
+                          ', table=' . $this->config['dbtable']);
+
+                // Validate required config (same guard used in install.php).
+                $missing = [];
+                if ($this->config['host'] === '') { $missing[] = 'host'; }
+                if ($this->config['port'] === '') { $missing[] = 'port'; }
+                if ($this->config['database'] === '') { $missing[] = 'database'; }
+                if ($this->config['username'] === '') { $missing[] = 'username'; }
+                if ($this->config['dbtable'] === '') { $missing[] = 'dbtable'; }
+                if (!empty($missing)) {
+                    $msg = 'Configuração incompleta; cliente TimescaleDB não será inicializado. Faltando: ' . implode(', ', $missing);
+                    debugging($msg, DEBUG_NORMAL);
+                    error_log('[LOGSTORE_TSDB] WARNING: ' . $msg);
+                    $this->client = null;
+                    return;
+                }
 
                 // Initialize TimescaleDB client.
                 require_once(__DIR__ . '/../client/timescaledb_client.php');
