@@ -75,11 +75,18 @@ $string['timescaledb_notfound'] = 'TimescaleDB extension not installed (plugin w
 $string['tabletest'] = 'Table Access Test';
 $string['tabletest_success'] = 'Table "{$a->table}" is accessible and contains {$a->count} events';
 $string['tabletest_failed'] = 'Cannot access table "{$a->table}": {$a->error}';
+$string['tabletest_notexists'] = 'Table "{$a}" does not exist in TimescaleDB. Use "Initialize TimescaleDB" to create it.';
 $string['buffertest'] = 'Buffer Status';
 $string['currentbuffersize'] = 'Current buffer size: {$a} events';
 $string['asyncmode_enabled'] = 'Async mode enabled (buffer size: {$a->buffersize}, flush interval: {$a->flushinterval}s)';
 $string['syncmode_enabled'] = 'Sync mode enabled (immediate writes)';
 $string['backtosettings'] = 'Back to Settings';
+
+// Initialization controls.
+$string['initialize_tsdb'] = 'Initialize TimescaleDB';
+$string['initialize_tsdb_button'] = 'Initialize TimescaleDB (create table and indexes)';
+$string['initialize_tsdb_success'] = 'TimescaleDB initialized. Table "{$a->table}" accessible with {$a->count} events.';
+$string['initialize_tsdb_failed'] = 'Failed to initialize TimescaleDB: {$a}';
 
 // Error messages.
 $string['error_connection'] = 'Failed to connect to TimescaleDB server at {$a->host}:{$a->port}';

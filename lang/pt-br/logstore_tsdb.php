@@ -75,11 +75,18 @@ $string['timescaledb_notfound'] = 'Extensão TimescaleDB não instalada (o plugi
 $string['tabletest'] = 'Teste de Acesso à Tabela';
 $string['tabletest_success'] = 'Tabela "{$a->table}" está acessível e contém {$a->count} eventos';
 $string['tabletest_failed'] = 'Não foi possível acessar a tabela "{$a->table}": {$a->error}';
+$string['tabletest_notexists'] = 'Tabela "{$a}" não existe no TimescaleDB. Use "Inicializar TimescaleDB" para criar.';
 $string['buffertest'] = 'Status do Buffer';
 $string['currentbuffersize'] = 'Tamanho atual do buffer: {$a} eventos';
 $string['asyncmode_enabled'] = 'Modo assíncrono ativado (tamanho do buffer: {$a->buffersize}, intervalo de descarga: {$a->flushinterval}s)';
 $string['syncmode_enabled'] = 'Modo síncrono ativado (gravações imediatas)';
 $string['backtosettings'] = 'Voltar para Configurações';
+
+// Initialization controls.
+$string['initialize_tsdb'] = 'Inicializar TimescaleDB';
+$string['initialize_tsdb_button'] = 'Inicializar TimescaleDB (criar tabela e índices)';
+$string['initialize_tsdb_success'] = 'TimescaleDB inicializado. Tabela "{$a->table}" acessível com {$a->count} eventos.';
+$string['initialize_tsdb_failed'] = 'Falha ao inicializar TimescaleDB: {$a}';
 
 // Error messages.
 $string['error_connection'] = 'Falha ao conectar ao servidor TimescaleDB em {$a->host}:{$a->port}';

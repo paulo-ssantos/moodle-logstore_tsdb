@@ -33,6 +33,9 @@ require_once($CFG->libdir . '/adminlib.php');
 require_login();
 require_capability('moodle/site:config', context_system::instance());
 
+// Optional init action to (re)initialize TimescaleDB objects.
+$action = optional_param('action', '', PARAM_ALPHA);
+
 // Set up the page.
 $pageurl = new moodle_url('/admin/tool/log/store/tsdb/test_settings.php');
 $PAGE->set_url($pageurl);
@@ -102,6 +105,40 @@ if (!empty($missingconfig)) {
     exit;
 }
 
+// Handle initialization request.
+if ($action === 'init') {
+    require_sesskey();
+    echo $OUTPUT->box_start('generalbox');
+    echo html_writer::tag('h3', get_string('initialize_tsdb', 'logstore_tsdb'));
+    try {
+        require_once($CFG->dirroot . '/admin/tool/log/store/tsdb/db/install.php');
+        xmldb_logstore_tsdb_install();
+        // After installing, try connecting and counting to confirm.
+        require_once($CFG->dirroot . '/admin/tool/log/store/tsdb/classes/client/timescaledb_client.php');
+        $client = new \logstore_tsdb\client\timescaledb_client($config);
+        $count = $client->count_events();
+        $client->close();
+        echo $OUTPUT->notification(
+            get_string('initialize_tsdb_success', 'logstore_tsdb', [
+                'table' => $config['dbtable'],
+                'count' => $count
+            ]),
+            'notifysuccess'
+        );
+    } catch (\moodle_exception $e) {
+        echo $OUTPUT->notification(
+            get_string('initialize_tsdb_failed', 'logstore_tsdb', $e->getMessage()),
+            'notifyproblem'
+        );
+    } catch (Exception $e) {
+        echo $OUTPUT->notification(
+            get_string('initialize_tsdb_failed', 'logstore_tsdb', $e->getMessage()),
+            'notifyproblem'
+        );
+    }
+    echo $OUTPUT->box_end();
+}
+
 // Test connection.
 echo $OUTPUT->box_start('generalbox');
 echo html_writer::tag('h3', get_string('connectiontest', 'logstore_tsdb'));
@@ -140,25 +177,47 @@ try {
             );
         }
         
-        // Test table access.
+        // Test table existence and access.
         echo html_writer::tag('h4', get_string('tabletest', 'logstore_tsdb'));
-        
-        try {
-            $count = $client->count_events();
+
+        $exists = false;
+        // Try unqualified regclass first, then explicit public.schema.
+        $res = $client->query('SELECT to_regclass($1)', [$config['dbtable']]);
+        if ($res !== false) {
+            $row = pg_fetch_row($res);
+            $exists = !empty($row[0]);
+        }
+        if (!$exists) {
+            $res = $client->query('SELECT to_regclass($1)', ['public.' . $config['dbtable']]);
+            if ($res !== false) {
+                $row = pg_fetch_row($res);
+                $exists = !empty($row[0]);
+            }
+        }
+
+        if ($exists) {
+            try {
+                $count = $client->count_events();
+                echo $OUTPUT->notification(
+                    get_string('tabletest_success', 'logstore_tsdb', [
+                        'table' => $config['dbtable'],
+                        'count' => $count
+                    ]),
+                    'notifysuccess'
+                );
+            } catch (Exception $e) {
+                echo $OUTPUT->notification(
+                    get_string('tabletest_failed', 'logstore_tsdb', [
+                        'table' => $config['dbtable'],
+                        'error' => $e->getMessage()
+                    ]),
+                    'notifywarning'
+                );
+            }
+        } else {
             echo $OUTPUT->notification(
-                get_string('tabletest_success', 'logstore_tsdb', [
-                    'table' => $config['dbtable'],
-                    'count' => $count
-                ]),
-                'notifysuccess'
-            );
-        } catch (Exception $e) {
-            echo $OUTPUT->notification(
-                get_string('tabletest_failed', 'logstore_tsdb', [
-                    'table' => $config['dbtable'],
-                    'error' => $e->getMessage()
-                ]),
-                'notifywarning'
+                get_string('tabletest_notexists', 'logstore_tsdb', $config['dbtable']),
+                'notifyproblem'
             );
         }
         
@@ -205,6 +264,16 @@ try {
 }
 
 echo $OUTPUT->box_end();
+
+// Render Initialize button (always available when config is complete).
+$initurl = new moodle_url($pageurl, ['action' => 'init', 'sesskey' => sesskey()]);
+echo html_writer::start_tag('div', ['class' => 'mt-2']);
+echo html_writer::link(
+    $initurl,
+    get_string('initialize_tsdb_button', 'logstore_tsdb'),
+    ['class' => 'btn btn-primary']
+);
+echo html_writer::end_tag('div');
 
 // Add close page button.
 echo html_writer::tag('div', 
