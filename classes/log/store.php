@@ -116,29 +116,17 @@ class store implements \tool_log\log\writer {
                     return;
                 }
 
-                // Initialize TimescaleDB client.
+                // Initialize TimescaleDB client (constructor handles connection and throws on failure).
                 require_once(__DIR__ . '/../client/timescaledb_client.php');
-                $this->client = new \logstore_tsdb\client\timescaledb_client($this->config);
-
-                // Verify connection.
-                if ($this->client->is_connected()) {
-                    $msg = 'TimescaleDB client initialized successfully';
-                    debugging($msg, DEBUG_DEVELOPER);
-                    error_log('[LOGSTORE_TSDB] ' . $msg);
-
-                    // Auto-create schema if it doesn't exist.
-                    try {
-                        $this->client->ensure_schema();
-                    } catch (\Exception $e) {
-                        $msg = 'Failed to ensure schema: ' . $e->getMessage();
-                        debugging($msg, DEBUG_NORMAL);
-                        error_log('[LOGSTORE_TSDB] WARNING: ' . $msg);
-                        // Continue - write attempts will fail gracefully.
-                    }
-                } else {
-                    $msg = 'TimescaleDB client connected but health check failed';
+                try {
+                    $this->client = new \logstore_tsdb\client\timescaledb_client($this->config);
+                    debugging('TimescaleDB client initialized', DEBUG_DEVELOPER);
+                    error_log('[LOGSTORE_TSDB] TimescaleDB client initialized');
+                } catch (\moodle_exception $e) {
+                    $msg = 'Failed to initialize TimescaleDB client: ' . $e->getMessage();
                     debugging($msg, DEBUG_NORMAL);
                     error_log('[LOGSTORE_TSDB] WARNING: ' . $msg);
+                    $this->client = null;
                 }
             } else {
                 // Future support for other TSDBs (InfluxDB, etc.)
