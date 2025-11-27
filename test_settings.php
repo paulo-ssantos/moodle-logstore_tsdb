@@ -221,26 +221,6 @@ try {
             );
         }
         
-        // Test buffer functionality if async mode.
-        if ($config['writemode'] === 'async') {
-            echo html_writer::tag('h4', get_string('buffertest', 'logstore_tsdb'));
-            $buffersize = $client->get_buffer_size();
-            echo html_writer::tag('p', get_string('currentbuffersize', 'logstore_tsdb', $buffersize));
-            echo $OUTPUT->notification(
-                get_string('asyncmode_enabled', 'logstore_tsdb', [
-                    'buffersize' => $config['buffersize'],
-                    'flushinterval' => $config['flushinterval']
-                ]),
-                'notifyinfo'
-            );
-        } else {
-            echo html_writer::tag('h4', get_string('writemode', 'logstore_tsdb'));
-            echo $OUTPUT->notification(
-                get_string('syncmode_enabled', 'logstore_tsdb'),
-                'notifyinfo'
-            );
-        }
-        
         // Close connection.
         $client->close();
         

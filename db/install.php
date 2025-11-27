@@ -120,10 +120,23 @@ function xmldb_logstore_tsdb_install() {
     $hasTimescale = $extRow && (int)$extRow['cnt'] > 0;
 
     // Hypertable.
+    $isHypertable = false;
     if ($hasTimescale) {
-        $sql = "SELECT create_hypertable('" . str_replace('"', '""', $tableName) . "', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);";
-        if (!logstore_tsdb_exec($conn, $sql, '[logstore_tsdb] Hypertable OK para: ' . $tableName, '[logstore_tsdb] Aviso: create_hypertable falhou')) {
-            // continua mesmo assim
+        // Qualify relation with schema to avoid search_path issues.
+        $qualifiednameplain = $pgschema . '.' . $tableName;
+        $hypsql = "SELECT create_hypertable('" . str_replace("'", "''", $qualifiednameplain) . "', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);";
+        if (!logstore_tsdb_exec($conn, $hypsql, '[logstore_tsdb] create_hypertable executado para: ' . $qualifiednameplain, '[logstore_tsdb] Aviso: create_hypertable falhou')) {
+            // Mantém execução, mas vamos checar existência mais abaixo.
+        }
+
+        // Verifica se virou hypertable.
+        $checksql = "SELECT 1 FROM timescaledb_information.hypertables WHERE hypertable_schema = '" . str_replace("'", "''", $pgschema) . "' AND hypertable_name = '" . str_replace("'", "''", $tableName) . "'";
+        $chkres = pg_query($conn, $checksql);
+        $isHypertable = ($chkres && pg_fetch_row($chkres));
+        if ($isHypertable) {
+            error_log('[logstore_tsdb] Confirmado: tabela é hypertable: ' . $qualifiednameplain);
+        } else {
+            error_log('[logstore_tsdb] Atenção: tabela NÃO virou hypertable: ' . $qualifiednameplain);
         }
     } else {
         error_log('[logstore_tsdb] Extensão timescaledb não encontrada; seguindo sem hypertable.');
@@ -133,9 +146,11 @@ function xmldb_logstore_tsdb_install() {
     logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_time ON " . $qualified . " (time DESC);", '[logstore_tsdb] Índice time OK');
     logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_userid ON " . $qualified . " (time DESC, userid);", '[logstore_tsdb] Índice userid OK');
 
-    // Compressão simples.
-    if ($hasTimescale) {
+    // Compressão simples somente para hypertable.
+    if ($hasTimescale && $isHypertable) {
         logstore_tsdb_exec($conn, "ALTER TABLE " . $qualified . " SET (timescaledb.compress);", '[logstore_tsdb] Compressão habilitada');
+    } elseif ($hasTimescale) {
+        error_log('[logstore_tsdb] Compressão não aplicada porque a tabela não é hypertable.');
     }
 
     pg_close($conn);
