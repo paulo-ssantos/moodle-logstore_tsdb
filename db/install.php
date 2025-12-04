@@ -15,15 +15,24 @@
 // along with Moodle. If not, see <http://www.gnu.org/licenses/>.
 
  /**
-  * db/install.php para logstore_timescaledb.
+  * db/install.php para logstore_tsdb.
   *
-  * - Torna a tabela criada via install.xml um hypertable do TimescaleDB (item obrigatório para séries temporais).
-  * - Cria índices em colunas cruciais para otimizar queries de analytics (opcional, mas altamente recomendado).
-  * - Ativa compressão, política de retenção e continuous aggregates para grande eficiência de storage e relatórios (opcionais, mas altamente recomendados para bancos grandes).
-  * - Cria uma função auxiliar SQL para relatórios rápidos (opcional).
-  * 
-  * OBS: Este arquivo só é executado automaticamente na instalação do plugin.
-  * Para upgrades de schema, use upgrade.php; para limpeza/remoção na desinstalação, use uninstall.php.
+  * Estado atual do processo de inicialização:
+  * - Lê as credenciais do TimescaleDB externo a partir de settings do plugin.
+  * - Garante o schema 'public' e ajusta o search_path para o schema alvo.
+  * - Cria/valida a tabela 'public.<dbtable>' com colunas esperadas para eventos do Moodle.
+  * - Se a extensão TimescaleDB estiver ativa no banco, converte a tabela em hypertable via
+  *   create_hypertable('<schema>.<tabela>'::regclass, 'time'), confirma em timescaledb_information.hypertables,
+  *   habilita compressão e adiciona uma política de compressão de 2 dias (add_compression_policy).
+  * - Cria índices úteis: em 'time' e em '(time, userid)'.
+  *
+  * Itens deliberadamente não implementados neste arquivo: política de retenção, continuous aggregates
+  * e funções auxiliares de relatório. Podem ser adicionados futuramente conforme necessidade.
+  *
+  * Observação importante: Não existe upgrade.php neste plugin. Este arquivo é executado apenas na
+  * instalação inicial do plugin. Em upgrades, o Moodle não reaplicará estas alterações automaticamente.
+  * Se precisar reaplicar/forçar a inicialização, utilize a página de teste do plugin (test_settings.php)
+  * ou execute os comandos SQL manualmente no banco.
   */
 
 // Helpers simples para manter legibilidade sem alterar SQLs.
@@ -143,7 +152,7 @@ function xmldb_logstore_tsdb_install() {
     logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_time ON " . $qualified . " (time DESC);", '[logstore_tsdb] Índice time OK');
     logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_userid ON " . $qualified . " (time DESC, userid);", '[logstore_tsdb] Índice userid OK');
     
-    // Fazemos a compressão de 7 Dias para otimizar o espaço de armazenamento.
+    // Fazemos a compressão de 2 horas para otimizar o espaço de armazenamento.
     if ($hasTimescale && $isHypertable) {
         logstore_tsdb_exec($conn, "ALTER TABLE " . $qualified . " SET (timescaledb.compress);", '[logstore_tsdb] Compressão habilitada');
         $policysql = "SELECT add_compression_policy('" . str_replace("'", "''", $qualifiednameplain) . "'::regclass, INTERVAL '2 hours');";
