@@ -56,13 +56,11 @@ function xmldb_logstore_tsdb_install() {
     $pgschema = 'public';
     $tableName = trim((string)($cfg->dbtable ?? ''));
 
-    // Garante que todos os campos foram configurados na interface antes de prosseguir.
     $missing = [];
     if ($pghost === '')    { $missing[] = 'host'; }
     if ($pgport === '')    { $missing[] = 'port'; }
     if ($pgdb === '')      { $missing[] = 'database'; }
     if ($pguser === '')    { $missing[] = 'username'; }
-    // Password pode ser vazio em setups com trust, mas se você exige, descomente:
     if ($tableName === '') { $missing[] = 'dbtable'; }
     if (!empty($missing)) {
         error_log('[logstore_tsdb] Configuração incompleta em settings.php; instalação adiada. Campos faltando: ' . implode(', ', $missing));
@@ -122,14 +120,13 @@ function xmldb_logstore_tsdb_install() {
     // Hypertable.
     $isHypertable = false;
     if ($hasTimescale) {
-        // Qualify relation with schema to avoid search_path issues.
         $qualifiednameplain = $pgschema . '.' . $tableName;
-        $hypsql = "SELECT create_hypertable('" . str_replace("'", "''", $qualifiednameplain) . "', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);";
+        $hypsql = "SELECT create_hypertable('" . str_replace("'", "''", $qualifiednameplain) . "'::regclass, 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);";
         if (!logstore_tsdb_exec($conn, $hypsql, '[logstore_tsdb] create_hypertable executado para: ' . $qualifiednameplain, '[logstore_tsdb] Aviso: create_hypertable falhou')) {
             // Mantém execução, mas vamos checar existência mais abaixo.
         }
 
-        // Verifica se virou hypertable.
+        // Fazemos a verificação se a tabela virou hypertable.
         $checksql = "SELECT 1 FROM timescaledb_information.hypertables WHERE hypertable_schema = '" . str_replace("'", "''", $pgschema) . "' AND hypertable_name = '" . str_replace("'", "''", $tableName) . "'";
         $chkres = pg_query($conn, $checksql);
         $isHypertable = ($chkres && pg_fetch_row($chkres));
@@ -142,13 +139,15 @@ function xmldb_logstore_tsdb_install() {
         error_log('[logstore_tsdb] Extensão timescaledb não encontrada; seguindo sem hypertable.');
     }
 
-    // Índices essenciais (SQLs mantidos).
+    // Índices para filtros de tempo e usuários.
     logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_time ON " . $qualified . " (time DESC);", '[logstore_tsdb] Índice time OK');
     logstore_tsdb_exec($conn, "CREATE INDEX IF NOT EXISTS idx_" . str_replace('"', '', $tableName) . "_userid ON " . $qualified . " (time DESC, userid);", '[logstore_tsdb] Índice userid OK');
-
-    // Compressão simples somente para hypertable.
+    
+    // Fazemos a compressão de 7 Dias para otimizar o espaço de armazenamento.
     if ($hasTimescale && $isHypertable) {
         logstore_tsdb_exec($conn, "ALTER TABLE " . $qualified . " SET (timescaledb.compress);", '[logstore_tsdb] Compressão habilitada');
+        $policysql = "SELECT add_compression_policy('" . str_replace("'", "''", $qualifiednameplain) . "'::regclass, INTERVAL '2 hours');";
+        logstore_tsdb_exec($conn, $policysql, '[logstore_tsdb] Política de compressão adicionada (2 horas)');
     } elseif ($hasTimescale) {
         error_log('[logstore_tsdb] Compressão não aplicada porque a tabela não é hypertable.');
     }
@@ -156,22 +155,4 @@ function xmldb_logstore_tsdb_install() {
     pg_close($conn);
     error_log('[logstore_tsdb] Inicialização concluída no TimescaleDB externo (apenas TSDB).');
 
-    /* Função auxiliar comentada (mantida conforme pedido, sem executar)
-    CREATE OR REPLACE FUNCTION get_events_per_hour(hours INTEGER DEFAULT 24)
-    RETURNS TABLE (
-        hour TIMESTAMPTZ,
-        count BIGINT
-    ) AS $$
-    BEGIN
-        RETURN QUERY
-        SELECT
-            time_bucket('1 hour', time) AS hour,
-            COUNT(*) AS count
-        FROM moodle_events
-        WHERE time > NOW() - (hours || ' hours')::INTERVAL
-        GROUP BY hour
-        ORDER BY hour DESC;
-    END; */
 }
-
-// Removidos helpers de parsing do install.xml para garantir criação apenas no TSDB externo.

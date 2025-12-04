@@ -177,47 +177,45 @@ try {
             );
         }
         
-        // Test table existence and access.
+        // Test table access.
         echo html_writer::tag('h4', get_string('tabletest', 'logstore_tsdb'));
-
-        $exists = false;
-        // Try unqualified regclass first, then explicit public.schema.
-        $res = $client->query('SELECT to_regclass($1)', [$config['dbtable']]);
-        if ($res !== false) {
-            $row = pg_fetch_row($res);
-            $exists = !empty($row[0]);
-        }
-        if (!$exists) {
-            $res = $client->query('SELECT to_regclass($1)', ['public.' . $config['dbtable']]);
-            if ($res !== false) {
-                $row = pg_fetch_row($res);
-                $exists = !empty($row[0]);
-            }
-        }
-
-        if ($exists) {
-            try {
-                $count = $client->count_events();
-                echo $OUTPUT->notification(
-                    get_string('tabletest_success', 'logstore_tsdb', [
-                        'table' => $config['dbtable'],
-                        'count' => $count
-                    ]),
-                    'notifysuccess'
-                );
-            } catch (Exception $e) {
-                echo $OUTPUT->notification(
-                    get_string('tabletest_failed', 'logstore_tsdb', [
-                        'table' => $config['dbtable'],
-                        'error' => $e->getMessage()
-                    ]),
-                    'notifywarning'
-                );
-            }
-        } else {
+        
+        try {
+            $count = $client->count_events();
             echo $OUTPUT->notification(
-                get_string('tabletest_notexists', 'logstore_tsdb', $config['dbtable']),
-                'notifyproblem'
+                get_string('tabletest_success', 'logstore_tsdb', [
+                    'table' => $config['dbtable'],
+                    'count' => $count
+                ]),
+                'notifysuccess'
+            );
+        } catch (Exception $e) {
+            echo $OUTPUT->notification(
+                get_string('tabletest_failed', 'logstore_tsdb', [
+                    'table' => $config['dbtable'],
+                    'error' => $e->getMessage()
+                ]),
+                'notifywarning'
+            );
+        }
+        
+        // Test buffer functionality if async mode.
+        if ($config['writemode'] === 'async') {
+            echo html_writer::tag('h4', get_string('buffertest', 'logstore_tsdb'));
+            $buffersize = $client->get_buffer_size();
+            echo html_writer::tag('p', get_string('currentbuffersize', 'logstore_tsdb', $buffersize));
+            echo $OUTPUT->notification(
+                get_string('asyncmode_enabled', 'logstore_tsdb', [
+                    'buffersize' => $config['buffersize'],
+                    'flushinterval' => $config['flushinterval']
+                ]),
+                'notifyinfo'
+            );
+        } else {
+            echo html_writer::tag('h4', get_string('writemode', 'logstore_tsdb'));
+            echo $OUTPUT->notification(
+                get_string('syncmode_enabled', 'logstore_tsdb'),
+                'notifyinfo'
             );
         }
         
