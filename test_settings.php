@@ -256,7 +256,7 @@ echo html_writer::end_tag('div');
 // Add close page button.
 echo html_writer::tag('div', 
     html_writer::tag('button', 
-        get_string('close', 'core'),
+        get_string('close', 'logstore_tsdb'),
         [
             'type' => 'button',
             'class' => 'btn btn-secondary',

@@ -85,6 +85,8 @@ $string['currentbuffersize'] = 'Current buffer size: {$a} events';
 $string['asyncmode_enabled'] = 'Async mode enabled (buffer size: {$a->buffersize}, flush interval: {$a->flushinterval}s)';
 $string['syncmode_enabled'] = 'Sync mode enabled (immediate writes)';
 $string['backtosettings'] = 'Back to Settings';
+$string['dbtable'] = 'Database Table Name';
+$string['close'] = 'Close';
 
 // Initialization controls.
 $string['initialize_tsdb'] = 'Initialize TimescaleDB';

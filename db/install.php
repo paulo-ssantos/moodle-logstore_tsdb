@@ -93,7 +93,7 @@ function xmldb_logstore_tsdb_install() {
 
     // CREATE TABLE (mantendo exatamente o mesmo SQL previamente utilizado).
     $createtable = 'CREATE TABLE IF NOT EXISTS ' . $qualified . ' (
-        "id" BIGSERIAL PRIMARY KEY,
+        "id" BIGSERIAL NOT NULL,
         "time" TIMESTAMPTZ NOT NULL,
         "eventname" VARCHAR(255) NOT NULL,
         "component" VARCHAR(100),
@@ -114,7 +114,9 @@ function xmldb_logstore_tsdb_install() {
         "timecreated" BIGINT,
         "ip" VARCHAR(45),
         "origin" VARCHAR(20),
-        "other" TEXT
+        "other" TEXT,
+
+        PRIMARY KEY (id, time)
     );';
     if (!logstore_tsdb_exec($conn, $createtable, '[logstore_tsdb] Tabela criada/confirmada no TSDB externo: ' . $qualified)) {
         pg_close($conn);

@@ -85,6 +85,8 @@ $string['currentbuffersize'] = 'Tamanho atual do buffer: {$a} eventos';
 $string['asyncmode_enabled'] = 'Modo assíncrono ativado (tamanho do buffer: {$a->buffersize}, intervalo de descarga: {$a->flushinterval}s)';
 $string['syncmode_enabled'] = 'Modo síncrono ativado (gravações imediatas)';
 $string['backtosettings'] = 'Voltar para Configurações';
+$string['dbtable'] = 'Nome da Tabela do Banco de Dados';
+$string['close'] = 'Fechar';
 
 // Initialization controls.
 $string['initialize_tsdb'] = 'Inicializar TimescaleDB';
