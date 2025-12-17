@@ -61,12 +61,6 @@ class timescaledb_client {
     /** @var bool Is connected */
     protected $connected = false;
 
-    /** @var array Buffer for async writes */
-    protected $buffer = [];
-
-    /** @var int Last flush timestamp */
-    protected $lastflush = 0;
-
     /** @var array Allowed ORDER BY columns for security */
     protected $allowedorderby = ['time', 'eventname', 'component', 'userid', 'courseid'];
 
@@ -90,14 +84,9 @@ class timescaledb_client {
             }
         }
 
-        // Set defaults for optional config.
-        $config['writemode'] = $config['writemode'] ?? 'async';
-        $config['buffersize'] = $config['buffersize'] ?? 1000;
-        $config['flushinterval'] = $config['flushinterval'] ?? 60;
-
+        // Store config (business logic params like writemode, buffersize are optional and not used here).
         $this->config = $config;
         $this->tablename = $config['dbtable'];
-        $this->lastflush = time();
         $this->connect();
     }
 
@@ -162,6 +151,9 @@ class timescaledb_client {
     /**
      * Write multiple datapoints to TimescaleDB (batch insert).
      *
+     * Pure data access method - writes directly to database without business logic.
+     * Buffering and write mode decisions are handled by the calling layer (store.php).
+     *
      * @param array $datapoints Array of datapoints
      * @return bool Success
      */
@@ -175,19 +167,7 @@ class timescaledb_client {
             return true;
         }
 
-        // Handle async mode with buffering.
-        if ($this->config['writemode'] === 'async') {
-            $this->buffer = array_merge($this->buffer, $datapoints);
-
-            // Check if we should flush the buffer.
-            if ($this->should_flush()) {
-                return $this->flush_buffer();
-            }
-
-            return true;
-        }
-
-        // Synchronous mode - write immediately.
+        // Direct write to database - no buffering or mode logic at this layer.
         return $this->write_to_database($datapoints);
     }
 
@@ -265,52 +245,7 @@ class timescaledb_client {
         }
     }
 
-    /**
-     * Check if buffer should be flushed.
-     *
-     * @return bool Should flush
-     */
-    protected function should_flush() {
-        // Check buffer size.
-        if (count($this->buffer) >= $this->config['buffersize']) {
-            return true;
-        }
 
-        // Check flush interval.
-        if ((time() - $this->lastflush) >= $this->config['flushinterval']) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Flush buffered events to database.
-     *
-     * @return bool Success
-     */
-    public function flush_buffer() {
-        if (empty($this->buffer)) {
-            return true;
-        }
-
-        $datapoints = $this->buffer;
-        $this->buffer = [];
-        $this->lastflush = time();
-
-        debugging('Flushing buffer with ' . count($datapoints) . ' events', DEBUG_DEVELOPER);
-
-        return $this->write_to_database($datapoints);
-    }
-
-    /**
-     * Get current buffer size.
-     *
-     * @return int Buffer size
-     */
-    public function get_buffer_size() {
-        return count($this->buffer);
-    }
 
     /**
      * Execute raw SQL query.
@@ -524,12 +459,6 @@ class timescaledb_client {
      * Close connection.
      */
     public function close() {
-        // Flush any buffered events before closing.
-        if ($this->config['writemode'] === 'async' && !empty($this->buffer)) {
-            debugging('Flushing buffer before closing connection', DEBUG_DEVELOPER);
-            $this->flush_buffer();
-        }
-
         if ($this->connected && $this->connection) {
             pg_close($this->connection);
             $this->connected = false;

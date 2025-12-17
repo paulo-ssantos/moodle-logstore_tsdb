@@ -31,6 +31,22 @@ defined('MOODLE_INTERNAL') || die();
  *
  * Implements writer interface to store Moodle events in a Time Series Database.
  *
+ * ARCHITECTURE PATTERN: Business Logic Layer (Orchestrator)
+ *
+ * This class is responsible for:
+ * - Receiving events from Moodle's logging system
+ * - Transforming events into TSDB-compatible format
+ * - DECIDING write strategy (synchronous vs asynchronous mode)
+ * - MANAGING event buffering (size thresholds and time intervals)
+ * - Coordinating the logging lifecycle (init, write, dispose)
+ *
+ * SEPARATION OF CONCERNS:
+ * - store.php = Business logic and orchestration ("WHAT to do and WHEN")
+ * - timescaledb_client.php = Data access and persistence ("HOW to execute")
+ *
+ * The client is a pure DAO (Data Access Object) without business logic.
+ * All buffering decisions and write mode logic are handled here at the business layer.
+ *
  * @package    logstore_tsdb
  * @copyright  2025 Your Name <your@email.com>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -266,6 +282,10 @@ class store implements \tool_log\log\writer {
 
     /**
      * Flush buffered events to TSDB.
+     *
+     * BUSINESS LOGIC: This method manages the buffer at the business layer.
+     * The client (timescaledb_client) is a pure DAO that executes the write directly
+     * without re-buffering or making write mode decisions.
      *
      * @return bool Success status
      */
