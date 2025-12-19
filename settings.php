@@ -356,4 +356,33 @@ if ($hassiteconfig) {
         get_string('databasetable_help', 'logstore_tsdb'),
         'moodle_events'
     ));
+
+
+    // Write mode settings.
+    $settings->add(new admin_setting_configselect(
+        'logstore_tsdb/writemode',
+        get_string('writemode', 'logstore_tsdb'),
+        get_string('writemode_help', 'logstore_tsdb'),
+        'async',
+        array(
+            'sync' => get_string('writemode_sync', 'logstore_tsdb'),
+            'async' => get_string('writemode_async', 'logstore_tsdb')
+        )
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'logstore_tsdb/buffersize',
+        get_string('buffersize', 'logstore_tsdb'),
+        get_string('buffersize_help', 'logstore_tsdb'),
+        '1000',
+        PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'logstore_tsdb/flushinterval',
+        get_string('flushinterval', 'logstore_tsdb'),
+        get_string('flushinterval_help', 'logstore_tsdb'),
+        '60',
+        PARAM_INT
+    ));
 }
